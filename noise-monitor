@@ -1,0 +1,91 @@
+#!/bin/sh /etc/rc.common
+
+START=95 # Start late in the boot process
+STOP=05  # Stop early during shutdown
+
+# Name of your service
+SERVICE_NAME="NoiseMonitor"
+
+# Path to your main script
+SCRIPT="/usr/bin/noise-monitor-MQTT.sh"
+
+# Path for the PID file (to track the process ID)
+PID_FILE="/var/run/${SERVICE_NAME}.pid"
+
+# Path for the log file (for script output)
+LOG_FILE="/var/log/${SERVICE_NAME}.log"
+
+# Function to start the service
+start() {
+    echo "Starting $SERVICE_NAME..."
+
+    # Check if the script exists
+    if [ ! -f "$SCRIPT" ]; then
+        echo "Error: Script $SCRIPT not found!" >&2 # Send error to stderr
+        return 1
+    fi
+
+    # Check if the process is already running using kill -0 for BusyBox compatibility
+    # Redirect kill's potential stderr (e.g., if PID doesn't exist) to /dev/null
+    if [ -f "$PID_FILE" ] && kill -0 $(cat "$PID_FILE") 2>/dev/null; then
+        echo "$SERVICE_NAME is already running."
+        return 0
+    fi
+
+    # Use nohup to run in background, redirect script's output to log, and store PID.
+    # The ( ... ) >/dev/null 2>&1 & syntax runs the nohup command in a subshell,
+    # and then redirects the *entire output of that subshell* (including nohup's own messages)
+    # to /dev/null, effectively silencing it from the terminal.
+    # The script's errors will still go to LOG_FILE via 2>>.
+    ( /usr/bin/nohup "$SCRIPT" 2>> "$LOG_FILE" > /dev/null ) >/dev/null 2>&1 &
+    PID=$! # Get the PID of the last background process
+    echo "$PID" > "$PID_FILE"
+    echo "$SERVICE_NAME started with PID $PID. Output logged to $LOG_FILE"
+}
+
+# Function to stop the service
+stop() {
+    echo "Stopping $SERVICE_NAME..."
+
+    if [ -f "$PID_FILE" ]; then
+        PID=$(cat "$PID_FILE")
+        # Check if process is running using kill -0
+        if kill -0 "$PID" 2>/dev/null; then
+            kill "$PID"
+            sleep 2 # Give it a moment to terminate
+            # Check again if it's still running
+            if kill -0 "$PID" 2>/dev/null; then
+                echo "$SERVICE_NAME still running, attempting forceful kill..." >&2 # Send error to stderr
+                kill -9 "$PID" # Force kill if it didn't stop cleanly
+            fi
+            rm -f "$PID_FILE"
+            echo "$SERVICE_NAME stopped."
+        else
+            echo "$SERVICE_NAME not running (PID file exists but process not found)." >&2 # Send error to stderr
+            rm -f "$PID_FILE"
+        fi
+    else
+        echo "$SERVICE_NAME not running (PID file not found)." >&2 # Send error to stderr
+    fi
+}
+
+# Function to restart the service (optional but good practice)
+restart() {
+    stop
+    start
+}
+
+# Function to check service status (optional)
+status() {
+    if [ -f "$PID_FILE" ]; then
+        PID=$(cat "$PID_FILE")
+        if kill -0 "$PID" 2>/dev/null; then
+            echo "$SERVICE_NAME is running (PID: $PID)."
+        else
+            echo "$SERVICE_NAME is not running, but PID file exists."
+            rm -f "$PID_FILE"
+        fi
+    else
+        echo "$SERVICE_NAME is not running."
+    fi
+}
